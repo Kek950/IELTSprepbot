@@ -1698,8 +1698,29 @@ def main():
 
     print("IELTS Prep Bot starting - Teacher & Student System")
     print("DEV_MODE:", os.getenv("DEV_MODE", "false"))
-    print("Press Ctrl+C to stop")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    webhook_url = os.getenv("WEBHOOK_URL")  # e.g. https://your-bot.onrender.com
+
+    if webhook_url:
+        # ── PRODUCTION (Render) ─────────────────────────────────────────
+        # PTB's built-in tornado server listens on PORT (Render injects this)
+        # and forwards POST /webhook requests as Telegram updates.
+        port = int(os.environ.get("PORT", 10000))
+        full_webhook_url = webhook_url.rstrip("/") + "/webhook"
+        print(f"Running in WEBHOOK mode on port {port}")
+        print(f"Webhook URL: {full_webhook_url}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path="webhook",
+            webhook_url=full_webhook_url,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    else:
+        # ── LOCAL DEVELOPMENT ───────────────────────────────────────────
+        print("Running in POLLING mode (no WEBHOOK_URL set)")
+        print("Press Ctrl+C to stop")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
