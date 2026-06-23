@@ -23,6 +23,8 @@ COMMANDS:
 """
 
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import firebase
 from firebase import FirestoreRow
 import json
@@ -1536,12 +1538,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+
+
+# ══════════════════════════════════════════════════════════════════
+# HEALTH SERVER  (keeps Render's port-scan happy on the free tier)
+# ══════════════════════════════════════════════════════════════════
+
+def _start_health_server() -> None:
+    """Bind a minimal HTTP server to $PORT immediately so Render's
+    port-scan passes before the Telegram bot finishes initialising."""
+    port = int(os.environ.get("PORT", 10000))
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):                              # health / uptime-robot ping
+            body = b"OK"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):                  # silence access logs
+            pass
+
+    server = HTTPServer(("0.0.0.0", port), _Handler)
+    print(f"[health] Listening on 0.0.0.0:{port}")
+    server.serve_forever()
+
+
 # ══════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
 def main():
+    # ── Bind port FIRST so Render's port-scan never times out ──────
+    threading.Thread(target=_start_health_server, daemon=True).start()
+
     init_db()
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         print("Error: TELEGRAM_BOT_TOKEN not set in .env file")
@@ -1698,29 +1732,10 @@ def main():
 
     print("IELTS Prep Bot starting - Teacher & Student System")
     print("DEV_MODE:", os.getenv("DEV_MODE", "false"))
-
-    webhook_url = os.getenv("WEBHOOK_URL")  # e.g. https://your-bot.onrender.com
-
-    if webhook_url:
-        # ── PRODUCTION (Render) ─────────────────────────────────────────
-        # PTB's built-in tornado server listens on PORT (Render injects this)
-        # and forwards POST /webhook requests as Telegram updates.
-        port = int(os.environ.get("PORT", 10000))
-        full_webhook_url = webhook_url.rstrip("/") + "/webhook"
-        print(f"Running in WEBHOOK mode on port {port}")
-        print(f"Webhook URL: {full_webhook_url}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path="webhook",
-            webhook_url=full_webhook_url,
-            allowed_updates=Update.ALL_TYPES,
-        )
-    else:
-        # ── LOCAL DEVELOPMENT ───────────────────────────────────────────
-        print("Running in POLLING mode (no WEBHOOK_URL set)")
-        print("Press Ctrl+C to stop")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("Press Ctrl+C to stop")
+    # Health server thread (started above) owns $PORT — no conflict.
+    # Bot uses long-polling which works perfectly on Render's free tier.
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
