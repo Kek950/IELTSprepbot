@@ -10,6 +10,7 @@ import HistoryView from './components/views/HistoryView';
 import TokensView from './components/views/TokensView';
 import ClassroomView from './components/views/ClassroomView';
 import TeacherView from './components/views/TeacherView';
+import MocksView from './components/views/MocksView';
 import SettingsView from './components/views/SettingsView';
 
 function MainApp() {
@@ -105,6 +106,7 @@ function MainApp() {
           />
         )}
         {currentView === 'practice' && <PracticeView />}
+        {currentView === 'mocks' && <MocksView targetBand={targetBand} />}
         {currentView === 'homework' && <HomeworkView onStartEssay={handleStartEssayFromHomework} />}
         {currentView === 'history' && <HistoryView />}
         {currentView === 'tokens' && <TokensView />}

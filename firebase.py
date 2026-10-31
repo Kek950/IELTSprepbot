@@ -97,7 +97,7 @@ def clear_db():
     collections = [
         "users", "time_logs", "writing_submissions", "token_usage",
         "classes", "class_members", "teacher_essays", "homework",
-        "homework_status", "lesson_broadcasts", "mock_exam_scores", "counters"
+        "homework_status", "lesson_broadcasts", "mock_test_scores", "mock_exam_scores", "counters"
     ]
     if db:
         for coll_name in collections:
@@ -126,6 +126,7 @@ def clear_db():
         "class_members": {},
         "homework": [],
         "homework_status": {},
+        "mock_test_scores": {},
         "mock_exam_scores": {}
     }
     print("[Firebase] Local store cache cleared.")
@@ -1236,15 +1237,20 @@ def calculate_ielts_overall(l, r, w, s):
     except Exception:
         return 0.0
 
-def record_mock_score(class_id, student_id, teacher_id, date_str, listening, reading, writing, speaking, notes="", overall=None):
+def record_mock_score(class_id, student_id, teacher_id, date_str, listening, reading, writing, speaking, notes="", overall=None, title=None):
     if overall is None:
         overall = calculate_ielts_overall(listening, reading, writing, speaking)
     else:
         overall = float(overall)
 
-    mock_id = f"mock_{class_id}_{student_id}_{date_str}".replace("-", "").replace(":", "").replace(" ", "_")
+    if not title:
+        title = "IELTS Mock Exam"
+
+    ts = int(datetime.now().timestamp())
+    mock_id = f"mock_{class_id}_{student_id}_{date_str}_{ts}".replace("-", "").replace(":", "").replace(" ", "_")
     record = {
         "id": mock_id,
+        "title": str(title),
         "class_id": str(class_id),
         "student_id": student_id,
         "teacher_id": teacher_id,
@@ -1268,6 +1274,27 @@ def record_mock_score(class_id, student_id, teacher_id, date_str, listening, rea
 
     _local_store.setdefault("mock_test_scores", {})[mock_id] = record
     return record
+
+def delete_mock_score(mock_id, student_id=None):
+    mid = str(mock_id)
+    if db:
+        try:
+            doc_ref = db.collection("mock_test_scores").document(mid)
+            doc = doc_ref.get()
+            if doc.exists:
+                d = doc.to_dict()
+                if student_id is None or str(d.get("student_id")) == str(student_id):
+                    doc_ref.delete()
+        except Exception:
+            pass
+
+    if "mock_test_scores" in _local_store:
+        if mid in _local_store["mock_test_scores"]:
+            item = _local_store["mock_test_scores"][mid]
+            if student_id is None or str(item.get("student_id")) == str(student_id):
+                del _local_store["mock_test_scores"][mid]
+
+    return True
 
 def get_class_mock_scores(class_id):
     scores = []

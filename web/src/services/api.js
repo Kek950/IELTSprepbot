@@ -754,30 +754,94 @@ export const apiService = {
     return record;
   },
 
-  async getStudentMockScores(rawPhone, classId) {
-    const phone = normalizePhone(rawPhone);
+  async recordStudentMockScore(rawIdent, mockData) {
+    const ident = (rawIdent || "").trim();
+    const payload = {
+      identifier: ident,
+      title: mockData.title || "IELTS Mock Exam",
+      date: mockData.date || new Date().toISOString().split("T")[0],
+      listening: parseFloat(mockData.listening ?? 6.5),
+      reading: parseFloat(mockData.reading ?? 6.5),
+      writing: parseFloat(mockData.writing ?? 6.5),
+      speaking: parseFloat(mockData.speaking ?? 6.5),
+      overall: mockData.overall ? parseFloat(mockData.overall) : undefined,
+      notes: mockData.notes || "",
+      class_id: mockData.class_id || "self"
+    };
+
+    let record = null;
     try {
-      const url = `${BACKEND_URL}/student/mock-scores?phone=${encodeURIComponent(phone)}${classId ? `&class_id=${encodeURIComponent(classId)}` : ''}`;
-      const res = await fetch(url);
+      const res = await fetch(`${BACKEND_URL}/student/mock-score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
       if (res.ok) {
         const d = await res.json();
-        if (d.scores && d.scores.length > 0) return d.scores;
+        if (d.record) record = d.record;
       }
     } catch (e) {}
 
-    // Fallback: return default practice month scores for rich visualization
-    const mocksKey = classId ? `ielts_mocks_${classId}` : "ielts_mocks_default";
-    const cached = JSON.parse(localStorage.getItem(mocksKey) || "[]");
-    if (cached.length > 0) return cached;
+    if (!record) {
+      // Offline fallback
+      const avg = (payload.listening + payload.reading + payload.writing + payload.speaking) / 4.0;
+      const rem = avg - Math.floor(avg);
+      const overall = rem < 0.25 ? Math.floor(avg) : rem < 0.75 ? Math.floor(avg) + 0.5 : Math.floor(avg) + 1.0;
+      record = {
+        id: `mock_self_${Date.now()}`,
+        title: payload.title,
+        class_id: "self",
+        date: payload.date,
+        listening: payload.listening,
+        reading: payload.reading,
+        writing: payload.writing,
+        speaking: payload.speaking,
+        overall: payload.overall || overall,
+        notes: payload.notes
+      };
+    }
 
-    // Default mock month trajectory for demonstration
-    return [
-      { id: "m1", date: "Oct 01", listening: 6.0, reading: 6.5, writing: 6.0, speaking: 6.5, overall: 6.5, notes: "Baseline mock exam" },
-      { id: "m2", date: "Oct 05", listening: 6.5, reading: 6.5, writing: 6.0, speaking: 6.5, overall: 6.5, notes: "Good reading skimming speed" },
-      { id: "m3", date: "Oct 10", listening: 7.0, reading: 7.0, writing: 6.5, speaking: 7.0, overall: 7.0, notes: "Strong listening section 3" },
-      { id: "m4", date: "Oct 15", listening: 7.5, reading: 7.0, writing: 6.5, speaking: 7.0, overall: 7.0, notes: "Writing Task 2 improved" },
-      { id: "m5", date: "Oct 20", listening: 8.0, reading: 7.5, writing: 7.0, speaking: 7.5, overall: 7.5, notes: "Examiner feedback: lexical resource band 8" },
-      { id: "m6", date: "Oct 25", listening: 8.5, reading: 8.0, writing: 7.5, speaking: 7.5, overall: 8.0, notes: "Peak mock test score!" }
-    ];
+    const mocksKey = `ielts_student_mocks_${ident}`;
+    const allMocks = JSON.parse(localStorage.getItem(mocksKey) || "[]");
+    allMocks.push(record);
+    localStorage.setItem(mocksKey, JSON.stringify(allMocks));
+    return record;
+  },
+
+  async deleteStudentMockScore(rawIdent, mockId) {
+    const ident = (rawIdent || "").trim();
+    try {
+      await fetch(`${BACKEND_URL}/student/mock-score/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: ident, mock_id: mockId })
+      });
+    } catch (e) {}
+
+    const mocksKey = `ielts_student_mocks_${ident}`;
+    const allMocks = JSON.parse(localStorage.getItem(mocksKey) || "[]");
+    const filtered = allMocks.filter(m => m.id !== mockId);
+    localStorage.setItem(mocksKey, JSON.stringify(filtered));
+    return true;
+  },
+
+  async getStudentMockScores(rawIdent, classId) {
+    const ident = (rawIdent || "").trim();
+    try {
+      const url = `${BACKEND_URL}/student/mock-scores?identifier=${encodeURIComponent(ident)}${classId ? `&class_id=${encodeURIComponent(classId)}` : ''}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const d = await res.json();
+        if (d.scores) {
+          const mocksKey = `ielts_student_mocks_${ident}`;
+          localStorage.setItem(mocksKey, JSON.stringify(d.scores));
+          return d.scores;
+        }
+      }
+    } catch (e) {}
+
+    const mocksKey = `ielts_student_mocks_${ident}`;
+    const cached = JSON.parse(localStorage.getItem(mocksKey) || "[]");
+    return cached;
   }
 };

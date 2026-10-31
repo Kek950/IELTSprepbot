@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  PenTool, Clock, BookOpen, History, Cpu, GraduationCap, Users, Settings, 
+  PenTool, Clock, BookOpen, History, Cpu, GraduationCap, Users, Settings, Target,
   Sun, Moon, LogIn, ChevronDown, Palette, Maximize2, Minimize2, Check, Lock, LogOut, Sparkles
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -33,6 +33,7 @@ export default function Header({
   const navItems = [
     { id: 'writing', short: 'Studio', fullName: 'Writing Studio & Rubric Evaluator', icon: PenTool },
     { id: 'practice', short: 'Practice', fullName: 'Daily Practice & Goal Tracker', icon: Clock },
+    { id: 'mocks', short: 'Mocks', fullName: 'Mock Tests & Trajectory Analytics', icon: Target },
     { id: 'homework', short: 'H/W', fullName: 'Homework & Assignments', icon: BookOpen, badge: pendingHw > 0 ? `${pendingHw}` : null },
     { id: 'history', short: 'Archive', fullName: 'Submission Archive & Score History', icon: History },
     { id: 'tokens', short: 'Tokens', fullName: 'API Token Telemetry & Usage', icon: Cpu },

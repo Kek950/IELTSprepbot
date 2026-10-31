@@ -2460,7 +2460,8 @@ def _start_health_server() -> None:
                     writing=writing,
                     speaking=speaking,
                     notes=notes,
-                    overall=overall
+                    overall=overall,
+                    title=payload.get("title", "Practice Month Mock Exam")
                 )
 
                 # Send Telegram notification to student
@@ -2482,6 +2483,55 @@ def _start_health_server() -> None:
                     pass
 
                 self._send_json(200, {"success": True, "record": record})
+                return
+
+            # Endpoint: /api/student/mock-score (Individual Mock Tracker)
+            if parsed_path == "/api/student/mock-score":
+                user_row = self._get_target_user(payload)
+                if not user_row:
+                    self._send_json(404, {"error": "User not found."})
+                    return
+
+                title = payload.get("title", "IELTS Mock Exam")
+                date_str = payload.get("date", datetime.now().strftime("%Y-%m-%d"))
+                listening = float(payload.get("listening", 6.5))
+                reading = float(payload.get("reading", 6.5))
+                writing = float(payload.get("writing", 6.5))
+                speaking = float(payload.get("speaking", 6.5))
+                overall = payload.get("overall")
+                notes = payload.get("notes", "")
+                class_id = payload.get("class_id", "self")
+
+                record = firebase.record_mock_score(
+                    class_id=class_id,
+                    student_id=user_row["user_id"],
+                    teacher_id="self",
+                    date_str=date_str,
+                    listening=listening,
+                    reading=reading,
+                    writing=writing,
+                    speaking=speaking,
+                    notes=notes,
+                    overall=overall,
+                    title=title
+                )
+                self._send_json(200, {"success": True, "record": record})
+                return
+
+            # Endpoint: /api/student/mock-score/delete
+            if parsed_path == "/api/student/mock-score/delete":
+                user_row = self._get_target_user(payload)
+                if not user_row:
+                    self._send_json(404, {"error": "User not found."})
+                    return
+
+                mock_id = payload.get("mock_id")
+                if not mock_id:
+                    self._send_json(400, {"error": "mock_id is required."})
+                    return
+
+                firebase.delete_mock_score(mock_id, student_id=user_row["user_id"])
+                self._send_json(200, {"success": True})
                 return
 
             self._send_json(404, {"error": "Endpoint not found."})

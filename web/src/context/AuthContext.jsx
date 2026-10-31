@@ -136,9 +136,22 @@ export function AuthProvider({ children }) {
     return await apiService.recordMockScore(user.phone_number, classId, studentId, dateStr, scores);
   };
 
+  const recordStudentMockScore = async (mockData) => {
+    if (!user) return null;
+    const ident = user.phone_number || user.nickname || user.username;
+    return await apiService.recordStudentMockScore(ident, mockData);
+  };
+
+  const deleteStudentMockScore = async (mockId) => {
+    if (!user) return false;
+    const ident = user.phone_number || user.nickname || user.username;
+    return await apiService.deleteStudentMockScore(ident, mockId);
+  };
+
   const getStudentMockScores = async (classId) => {
     if (!user) return [];
-    return await apiService.getStudentMockScores(user.phone_number, classId);
+    const ident = user.phone_number || user.nickname || user.username;
+    return await apiService.getStudentMockScores(ident, classId);
   };
 
   return (
@@ -158,6 +171,8 @@ export function AuthProvider({ children }) {
       addSubmission,
       getClassStats,
       recordMockScore,
+      recordStudentMockScore,
+      deleteStudentMockScore,
       getStudentMockScores
     }}>
       {children}
