@@ -19,7 +19,10 @@ function getBackendUrl() {
     const clean = savedSrv.replace(/\/$/, "");
     return clean.endsWith("/api") ? clean : `${clean}/api`;
   }
-  if (window.location.origin.includes("github.io") || window.location.origin.includes("5173")) {
+  if (window.location.origin.includes("github.io")) {
+    return "https://ieltsprepbot.onrender.com/api";
+  }
+  if (window.location.origin.includes("5173")) {
     return "http://localhost:10000/api";
   }
   return `${window.location.origin}/api`;
