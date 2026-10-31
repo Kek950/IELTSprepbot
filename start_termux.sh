@@ -8,7 +8,11 @@ echo "=========================================================="
 # 1. Acquire wake lock so Android doesn't sleep or kill the process
 termux-wake-lock
 
-# 2. Install Python & dependencies if not already installed
+# 2. Terminate any previous local instances to prevent getUpdates polling conflict
+pkill -9 -f "ielts_bot.py" 2>/dev/null || true
+sleep 1
+
+# 3. Install Python & dependencies if not already installed
 if ! command -v python &> /dev/null; then
     echo "[*] Installing Python and core packages..."
     pkg update -y
