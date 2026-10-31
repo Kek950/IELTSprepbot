@@ -7,9 +7,16 @@ echo.
 
 cd /d "%~dp0"
 
-:: Check if Python is installed
-python --version >nul 2>&1
-if errorlevel 1 (
+:: Locate Python
+set "PYTHON_CMD="
+if exist "C:\Python314\python.exe" (
+    set "PYTHON_CMD=C:\Python314\python.exe"
+) else (
+    python --version >nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=python"
+)
+
+if "%PYTHON_CMD%"=="" (
     echo [ERROR] Python is not installed or not in PATH
     echo Please install Python from https://www.python.org
     pause
@@ -19,7 +26,7 @@ if errorlevel 1 (
 :: Check if requirements are installed
 if not exist "venv\Scripts\activate.bat" (
     echo [INFO] First run - installing dependencies...
-    python -m venv venv
+    "%PYTHON_CMD%" -m venv venv
     call venv\Scripts\activate.bat
     pip install -r requirements.txt
     echo.
@@ -51,7 +58,11 @@ echo [INFO] Starting IELTS Bot...
 echo [INFO] Each user will provide their own AI API key
 echo [INFO] Press Ctrl+C to stop
 echo.
-python ielts_bot.py
+if exist "venv\Scripts\python.exe" (
+    venv\Scripts\python.exe ielts_bot.py
+) else (
+    "%PYTHON_CMD%" ielts_bot.py
+)
 
 echo.
 echo [INFO] Bot stopped.

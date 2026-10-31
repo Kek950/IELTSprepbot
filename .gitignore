@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 venv/
 serviceAccountKey.json
+*.tar.gz
+web/node_modules/
+
