@@ -12,17 +12,13 @@ termux-wake-lock
 pkill -9 -f "ielts_bot.py" 2>/dev/null || true
 sleep 1
 
-# 3. Install Python & dependencies if not already installed
-if ! command -v python &> /dev/null; then
-    echo "[*] Installing Python and core packages..."
-    pkg update -y
-    pkg install -y python clang libffi openssl
+# 3. Check if core dependencies are installed
+if ! python -c "import telegram, dotenv, firebase_admin, google.genai" 2>/dev/null; then
+    echo "[*] Missing dependencies detected. Installing requirements..."
+    pip install -r requirements.txt
+else
+    echo "[*] All Python dependencies verified."
 fi
-
-# 3. Install Python requirements
-echo "[*] Verifying Python requirements..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
 
 # 4. Display local IP address for phone/browser access
 LOCAL_IP=$(ifconfig 2>/dev/null | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | head -n 1)
