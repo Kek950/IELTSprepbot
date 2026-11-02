@@ -226,31 +226,134 @@ def get_user_by_phone(phone_number):
 # ---------------------------------------------------------
 # USER OPERATIONS
 # ---------------------------------------------------------
-def register_user(user, phone_number=None):
-    clean_phone = clean_phone_number(phone_number) if phone_number else None
+def find_user_by_username_or_id(user_id, username=None):
+    """Checks if a user exists in Firestore by user_id or by username/nickname."""
+    uid_str = str(user_id).strip() if user_id else ""
+    u_name = str(username or "").strip().lstrip('@').lower()
+
+    # 1. Check by user_id document
+    if db and uid_str:
+        try:
+            doc = db.collection("users").document(uid_str).get()
+            if doc.exists:
+                d = doc.to_dict()
+                if (d.get("role") and d.get("role") != "unset") or d.get("password") or d.get("phone_number"):
+                    return FirestoreRow(d), "id"
+        except Exception:
+            pass
+
+    # 2. Check local store by user_id
+    if uid_str in _local_store.get("users", {}):
+        d = _local_store["users"][uid_str]
+        if (d.get("role") and d.get("role") != "unset") or d.get("password") or d.get("phone_number"):
+            return FirestoreRow(d), "id"
+
+    # 3. Check by username / nickname in Firestore
+    if u_name:
+        if db:
+            try:
+                for doc in db.collection("users").where("nickname", "==", u_name).limit(1).stream():
+                    d = doc.to_dict()
+                    return FirestoreRow(d), "username"
+                for doc in db.collection("users").where("username", "==", u_name).limit(1).stream():
+                    d = doc.to_dict()
+                    return FirestoreRow(d), "username"
+                orig_nick = str(username or "").strip().lstrip('@')
+                if orig_nick != u_name:
+                    for doc in db.collection("users").where("nickname", "==", orig_nick).limit(1).stream():
+                        d = doc.to_dict()
+                        return FirestoreRow(d), "username"
+                    for doc in db.collection("users").where("username", "==", orig_nick).limit(1).stream():
+                        d = doc.to_dict()
+                        return FirestoreRow(d), "username"
+            except Exception:
+                pass
+
+        # Check local store by username
+        for k, d in _local_store.get("users", {}).items():
+            stored_nick = str(d.get("nickname") or d.get("username") or "").lstrip('@').lower()
+            if stored_nick == u_name:
+                return FirestoreRow(d), "username"
+
+    return None, None
+
+def sync_telegram_user(user_id, matched_user, tg_user=None):
+    """Links an existing matched user account to this Telegram user_id."""
+    uid_str = str(user_id)
+    m_data = dict(matched_user) if hasattr(matched_user, 'items') else {}
+    m_data["user_id"] = user_id
+    m_data["telegram_id"] = user_id
+    if tg_user:
+        if getattr(tg_user, "username", None):
+            m_data["telegram_username"] = tg_user.username
+            if not m_data.get("username"):
+                m_data["username"] = tg_user.username
+            if not m_data.get("nickname"):
+                m_data["nickname"] = tg_user.username
+        if not m_data.get("first_name") and getattr(tg_user, "first_name", None):
+            m_data["first_name"] = tg_user.first_name
+    
     if db:
         try:
-            user_ref = db.collection("users").document(str(user.id))
+            db.collection("users").document(uid_str).set(m_data, merge=True)
+            orig_id = str(matched_user.get("id") or matched_user.get("user_id") or "")
+            if orig_id and orig_id != uid_str:
+                db.collection("users").document(orig_id).set({
+                    "telegram_id": user_id,
+                    "linked_at": firestore.SERVER_TIMESTAMP
+                }, merge=True)
+        except Exception:
+            pass
+
+    _local_store.setdefault("users", {})[uid_str] = m_data
+    return FirestoreRow(m_data)
+
+def register_user(user, phone_number=None):
+    clean_phone = clean_phone_number(phone_number) if phone_number else None
+    uid_str = str(user.id)
+    u_name = str(getattr(user, "username", "") or "").strip().lstrip('@').lower()
+
+    if db:
+        try:
+            user_ref = db.collection("users").document(uid_str)
             doc = user_ref.get()
             if not doc.exists:
-                data = {
-                    "user_id": user.id,
-                    "username": user.username,
-                    "first_name": user.first_name,
-                    "role": "unset",
-                    "api_key": None,
-                    "model": "gemini-2.0-flash",
-                    "phone_number": clean_phone,
-                    "created_at": firestore.SERVER_TIMESTAMP
-                }
-                user_ref.set(data)
+                # Check if username or nickname already exists in another document
+                existing = None
+                if u_name:
+                    for d in db.collection("users").where("nickname", "==", u_name).limit(1).stream():
+                        existing = d.to_dict()
+                        break
+                    if not existing:
+                        for d in db.collection("users").where("username", "==", u_name).limit(1).stream():
+                            existing = d.to_dict()
+                            break
+
+                if existing:
+                    data = dict(existing)
+                    data["user_id"] = user.id
+                    data["telegram_id"] = user.id
+                    if clean_phone:
+                        data["phone_number"] = clean_phone
+                    user_ref.set(data, merge=True)
+                else:
+                    data = {
+                        "user_id": user.id,
+                        "username": getattr(user, "username", ""),
+                        "first_name": getattr(user, "first_name", ""),
+                        "role": "unset",
+                        "api_key": None,
+                        "model": "gemini-2.5-flash",
+                        "phone_number": clean_phone,
+                        "created_at": firestore.SERVER_TIMESTAMP
+                    }
+                    user_ref.set(data)
             elif clean_phone:
                 user_ref.update({"phone_number": clean_phone})
         except Exception:
             pass
 
     # Ensure local store has it
-    uid_str = str(user.id)
     if uid_str not in _local_store["users"]:
         _local_store["users"][uid_str] = {
             "user_id": user.id,

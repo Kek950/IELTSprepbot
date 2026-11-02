@@ -408,57 +408,83 @@ async def nickname_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    register_user(user)
-    role = get_user_role(user.id)
+    args = context.args or []
+    is_setup = update.message and update.message.text and update.message.text.startswith('/setup')
 
     # ── Fast-path 1: Deep-link register from website (?start=register or ?start=signup) ──
-    args = context.args or []
     if args and (args[0].lower() in ["register", "signup"] or args[0].startswith("login_")):
         if args[0].startswith("login_"):
             raw_phone = args[0].replace("login_", "").strip()
             clean = firebase.link_user_phone(user.id, raw_phone)
             context.user_data["reg_phone"] = clean
         return await register_start(update, context)
-    
-    is_setup = update.message and update.message.text and update.message.text.startswith('/setup')
-    
-    if role == "unset":
-        return await register_start(update, context)
-        
-    if role == "teacher":
-        await update.message.reply_text("Welcome back, Teacher! 👨‍🏫\nChoose an option below:", reply_markup=get_teacher_keyboard())
-        return ConversationHandler.END
 
-    # Student logic
-    api_key, model = get_user_config(user.id)
-    if api_key and not is_setup:
-        model_info = GEMINI_MODELS.get(model, {"name": model, "desc": f"🤖 {model}", "speed": "⚡⚡⚡⚡", "quality": "⭐⭐⭐⭐⭐", "default": False})
-        keyboard = []
-        for model_id, info in GEMINI_MODELS.items():
-            current = " ✅" if model_id == model else ""
-            default_tag = " (default)" if info["default"] and model_id != model else ""
-            keyboard.append([InlineKeyboardButton(f"{info['desc']}{current}{default_tag}", callback_data=f"switch_{model_id}")])
-        
-        phone = firebase.get_user_phone(user.id)
-        phone_hint = f"\n📱 Web Suite: Linked (`{phone}`) — log in at http://localhost:10000 with your password" if phone else "\n📱 Web Suite: Send /phone to link your web account"
+    # ── Fast-path 2: /setup command specifically configured for Gemini API key ──
+    if is_setup:
         await update.message.reply_text(
-            f"Welcome back, {user.first_name}! 🎯{phone_hint}\n\n🤖 Current model: {model_info['name']}\n⚡ Speed: {model_info['speed']} | ⭐ Quality: {model_info['quality']}\n\n🔄 Tap to switch model:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "Welcome to IELTS Prep Bot! 🎯\n\n"
+            "🔑 To configure your Google Gemini API key:\n"
+            "1️⃣ Go to: https://aistudio.google.com/apikey\n"
+            "2️⃣ Sign in with your Google account (must be 18+)\n"
+            "3️⃣ Click 'Create API Key' and copy it (starts with 'AIza...')\n"
+            "4️⃣ Paste it here\n\n"
+            "🔑 Send your Gemini API key now:",
+            reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
         )
-        await update.message.reply_text("Choose an option below:", reply_markup=get_student_keyboard())
-        return ConversationHandler.END
+        return ENTER_API_KEY
 
+    # ── Step 1: Check username & ID in database (DON'T go straight to registration) ──
+    matched_user, match_type = firebase.find_user_by_username_or_id(user.id, user.username)
+
+    if matched_user:
+        # Match found! Sync telegram id to this account
+        synced_user = firebase.sync_telegram_user(user.id, matched_user, user)
+        role = synced_user.get("role") or "student"
+        if role == "unset":
+            role = "student"
+            firebase.set_user_role(user.id, role)
+
+        display_name = user.first_name or synced_user.get("first_name") or "there"
+        account_handle = synced_user.get("nickname") or synced_user.get("username") or user.username or display_name
+        phone = synced_user.get("phone_number") or firebase.get_user_phone(user.id)
+        phone_info = f" • 📱 `{phone}`" if phone else ""
+
+        if role == "teacher":
+            await update.message.reply_text(
+                f"👋 *Welcome back, {display_name}!* 👨‍🏫\n\n"
+                f"👤 Verified Account: `@{account_handle}`{phone_info}\n\n"
+                f"What would you like to do?",
+                reply_markup=get_teacher_keyboard(),
+                parse_mode="Markdown"
+            )
+            return ConversationHandler.END
+        else:
+            api_key, model = get_user_config(user.id)
+            api_hint = "" if api_key else "\n\n💡 _Tip: Configure your free Gemini API key anytime with /setup to unlock AI essay evaluations._"
+
+            await update.message.reply_text(
+                f"👋 *Welcome back, {display_name}!* 🎯\n\n"
+                f"👤 Verified Account: `@{account_handle}`{phone_info}{api_hint}\n\n"
+                f"What would you like to do?",
+                reply_markup=get_student_keyboard(),
+                parse_mode="Markdown"
+            )
+            return ConversationHandler.END
+
+    # ── Step 2: No match found: Don't go straight to registration! Ask him what he wants to do! ──
+    u_handle = f"@{user.username}" if user.username else (user.first_name or "there")
+    keyboard = [
+        ["📝 Register New Account"],
+        ["📱 Link Phone Number", "❓ Help"]
+    ]
     await update.message.reply_text(
-        "Welcome to IELTS Prep Bot! 🎯\n\n"
-        "⚠️ To get started, you need your own Google Gemini API key.\n"
-        "1️⃣ Go to: https://aistudio.google.com/apikey\n"
-        "2️⃣ Sign in with your Google account (must be 18+)\n"
-        "3️⃣ Click 'Create API Key' and copy it (starts with 'AIza...')\n"
-        "4️⃣ Paste it here\n\n"
-        "🔑 Send your Gemini API key now:",
-        reply_markup=ReplyKeyboardRemove()
+        f"👋 *Welcome to IELTS Preparation Platform!* 🎯\n\n"
+        f"No existing account was found matching your Telegram username (`{u_handle}`).\n\n"
+        f"What would you like to do?",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
+        parse_mode="Markdown"
     )
-    return ENTER_API_KEY
+    return ConversationHandler.END
 
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -1898,6 +1924,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if "Register New Account" in text or text == "Register":
+        return await register_start(update, context)
+    if "Link Phone Number" in text or "Link Phone" in text:
+        return await phone_command(update, context)
+    if text == "❓ Help" or text == "Help":
+        return await help_command(update, context)
+
     if role == "student":
         if "📊 My Progress" in text: return await progress(update, context)
         if "📋 View History" in text: return await history(update, context)
@@ -2599,7 +2632,9 @@ def main():
         entry_points=[
             CommandHandler("start", start),
             CommandHandler("setup", start),
-            CommandHandler("register", register_start)
+            CommandHandler("register", register_start),
+            MessageHandler(filters.Regex(r"^(📝 Register New Account|Register)$"), register_start),
+            MessageHandler(filters.Regex(r"^(📱 Link Phone Number|Link Phone)$"), phone_command),
         ],
         states={
             REG_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_role_step)],
