@@ -148,6 +148,9 @@ def clean_phone_number(phone):
     if not phone: return ""
     import urllib.parse
     phone_str = urllib.parse.unquote(str(phone)).strip()
+    digits = re.sub(r'\D', '', phone_str)
+    if len(digits) < 7 or len(digits) > 15:
+        return ""
     clean = re.sub(r'[^\d+]', '', phone_str)
     if clean and not clean.startswith('+'):
         clean = '+' + clean

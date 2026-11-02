@@ -24,6 +24,7 @@ COMMANDS:
 
 import os
 import threading
+import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import firebase
 from firebase import FirestoreRow
@@ -33,6 +34,8 @@ import random
 import string
 from datetime import datetime, date
 from dotenv import load_dotenv
+import telegram
+import telegram.error
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -135,9 +138,15 @@ def get_teacher_keyboard():
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     role = get_user_role(user_id)
-    kb = get_teacher_keyboard() if role == "teacher" else get_student_keyboard()
-    if role == "unset":
-        kb = ReplyKeyboardRemove()
+    if role == "teacher":
+        kb = get_teacher_keyboard()
+    elif role == "student":
+        kb = get_student_keyboard()
+    else:
+        kb = ReplyKeyboardMarkup([
+            ["📝 Register New Account"],
+            ["📱 Link Phone Number", "❓ Help"]
+        ], resize_keyboard=True)
     await update.message.reply_text("Cancelled. What would you like to do?", reply_markup=kb)
     return ConversationHandler.END
 
@@ -152,24 +161,52 @@ async def register_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🎯 *IELTS Platform Registration*\n\n"
         f"Welcome, {user.first_name}! Set up your account credentials here to access both this Telegram bot and the Web portal.\n\n"
-        f"*Step 1 of 4:* Please select your role:",
+        f"*Step 1 of 3:* Please select your role using the buttons below:",
         reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True),
         parse_mode="Markdown"
     )
     return REG_ROLE
 
 async def reg_role_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
     user = update.effective_user
-    if "Cancel" in text:
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+
+    role_keyboard = [["👨‍🎓 I am a Student", "👨‍🏫 I am a Teacher"], ["❌ Cancel"]]
+    kb = ReplyKeyboardMarkup(role_keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
         return await cancel(update, context)
+
+    # Error handling for commands or non-text during role selection
+    if not msg or not msg.text:
+        await msg.reply_text(
+            "⚠️ Invalid input format. Please choose your role using the buttons below:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        return REG_ROLE
+
+    if text.startswith("/"):
+        await msg.reply_text(
+            f"⚠️ Commands cannot be used during role selection.\n\n"
+            f"*Step 1 of 3:* Please tap one of the buttons below to select your role, or send /cancel to exit:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        return REG_ROLE
 
     if "Student" in text:
         role = "student"
     elif "Teacher" in text:
         role = "teacher"
     else:
-        await update.message.reply_text("Please choose a valid role using the buttons below:")
+        await msg.reply_text(
+            "⚠️ Unrecognized role option.\n\n"
+            "*Step 1 of 3:* Please tap *👨‍🎓 I am a Student* or *👨‍🏫 I am a Teacher* below:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
         return REG_ROLE
 
     context.user_data["reg_role"] = role
@@ -178,35 +215,67 @@ async def reg_role_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from telegram import KeyboardButton
     existing_phone = firebase.get_user_phone(user.id)
     hint = f"\n(Currently linked: `{existing_phone}`)" if existing_phone else ""
-    kb = ReplyKeyboardMarkup([
+    phone_kb = ReplyKeyboardMarkup([
         [KeyboardButton("📱 Share Phone Number", request_contact=True)],
         ["❌ Cancel"]
     ], resize_keyboard=True, one_time_keyboard=True)
     
-    await update.message.reply_text(
+    await msg.reply_text(
         f"✅ Selected Role: *{role.capitalize()}*\n\n"
         f"*Step 2 of 3:* Phone Number Setup 📱{hint}\n\n"
         f"Tap *📱 Share Phone Number* below, or type your phone number in international format (e.g. `+998901234567`):",
-        reply_markup=kb,
+        reply_markup=phone_kb,
         parse_mode="Markdown"
     )
     return REG_PHONE
 
 async def reg_phone_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    text = (update.message.text or "").strip()
-    if "Cancel" in text:
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+
+    from telegram import KeyboardButton
+    phone_kb = ReplyKeyboardMarkup([
+        [KeyboardButton("📱 Share Phone Number", request_contact=True)],
+        ["❌ Cancel"]
+    ], resize_keyboard=True, one_time_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
         return await cancel(update, context)
 
+    # Error handling for commands or empty text during phone step
+    if not msg or (not msg.contact and not msg.text):
+        await msg.reply_text(
+            "⚠️ Invalid input format.\n\n"
+            "*Step 2 of 3:* Please tap *📱 Share Phone Number* below, or type your phone number (e.g. `+998901234567`):",
+            reply_markup=phone_kb,
+            parse_mode="Markdown"
+        )
+        return REG_PHONE
+
+    if text and text.startswith("/"):
+        await msg.reply_text(
+            f"⚠️ Commands cannot be used as phone numbers.\n\n"
+            f"*Step 2 of 3:* Please tap *📱 Share Phone Number* below, or type your phone number (e.g. `+998901234567`), or send /cancel to abort:",
+            reply_markup=phone_kb,
+            parse_mode="Markdown"
+        )
+        return REG_PHONE
+
     raw_phone = ""
-    if update.message.contact and update.message.contact.phone_number:
-        raw_phone = update.message.contact.phone_number
+    if msg.contact and msg.contact.phone_number:
+        raw_phone = msg.contact.phone_number
     elif text:
         raw_phone = text
 
     clean = firebase.link_user_phone(user.id, raw_phone)
     if not clean:
-        await update.message.reply_text("❌ Please enter a valid phone number with country code (e.g. `+998901234567`):")
+        await msg.reply_text(
+            "❌ That does not look like a valid international phone number.\n\n"
+            "Please include your country code (e.g. `+998901234567`), or tap *📱 Share Phone Number* below:",
+            reply_markup=phone_kb,
+            parse_mode="Markdown"
+        )
         return REG_PHONE
 
     context.user_data["reg_phone"] = clean
@@ -217,8 +286,8 @@ async def reg_phone_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["reg_nickname"] = chosen_nick
     firebase.set_user_nickname(user.id, chosen_nick)
 
-    # Immediately ask for Web Password right after sharing contact!
-    await update.message.reply_text(
+    # Ask for Web Password right after sharing contact!
+    await msg.reply_text(
         f"✅ *Phone Number Linked:* `{clean}`\n\n"
         f"🔐 *Step 3 of 3: Set Your Web Password*\n\n"
         f"Please enter the password you want to use to log into the Web Platform:\n"
@@ -229,13 +298,31 @@ async def reg_phone_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return REG_PASSWORD
 
 async def reg_choose_nick_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
     user = update.effective_user
-    if "Cancel" in text:
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+
+    nick_opts_kb = ReplyKeyboardMarkup([["👤 Use Telegram Username", "✏️ Custom Nickname"], ["❌ Cancel"]], resize_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
         return await cancel(update, context)
 
+    if not msg or not msg.text:
+        await msg.reply_text(
+            "⚠️ Invalid input. Please tap one of the buttons to choose your nickname, or tap '❌ Cancel':",
+            reply_markup=nick_opts_kb
+        )
+        return REG_CHOOSE_NICK
+
+    if text.startswith("/"):
+        await msg.reply_text(
+            f"⚠️ Commands cannot be used during nickname setup.\n\nPlease choose an option below, or send /cancel:",
+            reply_markup=nick_opts_kb
+        )
+        return REG_CHOOSE_NICK
+
     if "Custom" in text:
-        await update.message.reply_text(
+        await msg.reply_text(
             "👤 *Custom Nickname*\n\n"
             "Type your desired login nickname (letters, numbers, underscores; min 3 chars):\n"
             "Example: `azamat_ielts`",
@@ -249,9 +336,9 @@ async def reg_choose_nick_step(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["reg_nickname"] = chosen_nick
     firebase.set_user_nickname(user.id, chosen_nick)
 
-    await update.message.reply_text(
+    await msg.reply_text(
         f"✅ Nickname set to: *@{chosen_nick}*\n\n"
-        f"*Step 4 of 4:* Set your Web Password 🔐\n\n"
+        f"*Step 3 of 3:* Set your Web Password 🔐\n\n"
         f"Enter a secure password for web login (minimum 4 characters):\n"
         f"_(Your message will be automatically deleted for your security)_",
         reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True),
@@ -260,21 +347,41 @@ async def reg_choose_nick_step(update: Update, context: ContextTypes.DEFAULT_TYP
     return REG_PASSWORD
 
 async def reg_custom_nick_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip().lstrip('@')
     user = update.effective_user
-    if "Cancel" in text:
+    msg = update.effective_message
+    text = (msg.text or "").strip().lstrip('@') if msg else ""
+    nick_kb = ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
         return await cancel(update, context)
 
+    if not msg or not msg.text:
+        await msg.reply_text(
+            "⚠️ Nickname must be sent as text.\n\nPlease type your desired login nickname (min 3 chars):",
+            reply_markup=nick_kb
+        )
+        return REG_CUSTOM_NICK
+
+    if text.startswith("/"):
+        await msg.reply_text(
+            f"⚠️ Commands cannot be used as a nickname.\n\nPlease type your desired login nickname (letters, numbers, min 3 chars), or send /cancel:",
+            reply_markup=nick_kb
+        )
+        return REG_CUSTOM_NICK
+
     if len(text) < 3:
-        await update.message.reply_text("❌ Nickname must be at least 3 characters long. Try again:")
+        await msg.reply_text(
+            "❌ Nickname must be at least 3 characters long. Please try again:",
+            reply_markup=nick_kb
+        )
         return REG_CUSTOM_NICK
 
     context.user_data["reg_nickname"] = text
     firebase.set_user_nickname(user.id, text)
 
-    await update.message.reply_text(
+    await msg.reply_text(
         f"✅ Nickname set to: *@{text}*\n\n"
-        f"*Step 4 of 4:* Set your Web Password 🔐\n\n"
+        f"*Step 3 of 3:* Set your Web Password 🔐\n\n"
         f"Enter a secure password for web login (minimum 4 characters):\n"
         f"_(Your message will be automatically deleted for your security)_",
         reply_markup=ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True),
@@ -283,17 +390,44 @@ async def reg_custom_nick_step(update: Update, context: ContextTypes.DEFAULT_TYP
     return REG_PASSWORD
 
 async def reg_password_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
     user = update.effective_user
-    if "Cancel" in text:
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+    pwd_kb = ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
         return await cancel(update, context)
 
+    # Error handling for commands or non-text
+    if not msg or not msg.text:
+        await msg.reply_text(
+            "⚠️ Passwords must be sent as text.\n\n"
+            "*Step 3 of 3:* Please enter your password (minimum 4 characters), or tap '❌ Cancel':",
+            reply_markup=pwd_kb,
+            parse_mode="Markdown"
+        )
+        return REG_PASSWORD
+
+    if text.startswith("/"):
+        await msg.reply_text(
+            f"⚠️ Commands cannot be used as passwords.\n\n"
+            f"*Step 3 of 3:* Please enter a password for your web account (minimum 4 characters), or send /cancel to abort:",
+            reply_markup=pwd_kb,
+            parse_mode="Markdown"
+        )
+        return REG_PASSWORD
+
     if len(text) < 4:
-        await update.message.reply_text("❌ Password must be at least 4 characters long. Try again:")
+        await msg.reply_text(
+            "❌ Password is too short! It must be at least 4 characters long.\n\n"
+            "Please enter your password again:",
+            reply_markup=pwd_kb,
+            parse_mode="Markdown"
+        )
         return REG_PASSWORD
 
     try:
-        await update.message.delete()
+        await msg.delete()
     except Exception:
         pass
 
@@ -312,7 +446,7 @@ async def reg_password_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = get_teacher_keyboard() if role == "teacher" else get_student_keyboard()
 
-    await update.message.reply_text(
+    await msg.reply_text(
         f"🎉 *Registration Complete!*\n\n"
         f"Your account credentials have been secured:\n\n"
         f"🎖 *Role:* {role.capitalize()}\n"
@@ -487,37 +621,68 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def choose_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
     user = update.effective_user
+
+    role_keyboard = [["👨‍🎓 I am a Student", "👨‍🏫 I am a Teacher"], ["❌ Cancel"]]
+    kb = ReplyKeyboardMarkup(role_keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
+        return await cancel(update, context)
+
+    if not msg or not msg.text:
+        await msg.reply_text("⚠️ Invalid input. Please choose your role using the buttons below:", reply_markup=kb)
+        return CHOOSE_ROLE
+
+    if text.startswith("/"):
+        await msg.reply_text("⚠️ Commands cannot be used during role selection. Please choose your role below, or send /cancel:", reply_markup=kb)
+        return CHOOSE_ROLE
+
     if "Student" in text:
         set_user_role(user.id, "student")
-        await update.message.reply_text("You are now registered as a Student! 👨‍🎓")
+        await msg.reply_text("You are now registered as a Student! 👨‍🎓")
         return await start(update, context)
     elif "Teacher" in text:
         set_user_role(user.id, "teacher")
-        await update.message.reply_text("You are now registered as a Teacher! 👨‍🏫")
+        await msg.reply_text("You are now registered as a Teacher! 👨‍🏫")
         return await start(update, context)
     else:
-        await update.message.reply_text("Please choose a valid role using the buttons.")
+        await msg.reply_text("Please choose a valid role using the buttons below:", reply_markup=kb)
         return CHOOSE_ROLE
 
 async def enter_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    api_key = update.message.text.strip()
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+    cancel_kb = ReplyKeyboardMarkup([["❌ Cancel"]], resize_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel":
+        return await cancel(update, context)
+
+    if not msg or not msg.text:
+        await msg.reply_text("⚠️ Please send your Gemini API key as text (starts with 'AIza...'), or send /cancel:", reply_markup=cancel_kb)
+        return ENTER_API_KEY
+
+    if text.startswith("/"):
+        await msg.reply_text("⚠️ Commands cannot be used as an API key. Please paste your Gemini API key, or send /cancel:", reply_markup=cancel_kb)
+        return ENTER_API_KEY
+
+    api_key = text
     if len(api_key) < 20:
-        await update.message.reply_text("❌ Invalid API key. Get one at: https://aistudio.google.com/apikey\nTry again or /cancel.")
+        await msg.reply_text("❌ Invalid API key. Get one at: https://aistudio.google.com/apikey\nTry again or send /cancel:", reply_markup=cancel_kb)
         return ENTER_API_KEY
     try:
-        await update.message.delete()
+        await msg.delete()
     except Exception:
         pass
     
-    await update.message.reply_text("🔄 Validating your API key...")
+    await msg.reply_text("🔄 Validating your API key...")
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
         client.models.generate_content(model=DEFAULT_MODEL, contents="Say 'ok'", config=genai.types.GenerateContentConfig(max_output_tokens=5))
     except Exception as e:
-        await update.message.reply_text(f"❌ API key validation failed.\nError: {str(e)[:200]}\nSend valid key or /cancel.")
+        await msg.reply_text(f"❌ API key validation failed.\nError: {str(e)[:200]}\nSend valid key or /cancel:", reply_markup=cancel_kb)
         return ENTER_API_KEY
 
     context.user_data["api_key"] = api_key
@@ -526,7 +691,7 @@ async def enter_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tag = " ✅ DEFAULT" if info["default"] else ""
         keyboard.append([InlineKeyboardButton(f"{info['desc']}{tag}", callback_data=f"model_{model_id}")])
     
-    await update.message.reply_text("✅ API key is valid!\n🤖 Choose a model:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await msg.reply_text("✅ API key is valid!\n🤖 Choose a model:", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_MODEL
 
 async def select_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -550,15 +715,32 @@ async def select_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRM_SETUP
 
 async def confirm_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if "❌" in text: return await cancel(update, context)
+    msg = update.effective_message
+    text = (msg.text or "").strip() if msg else ""
+    cancel_kb = ReplyKeyboardMarkup([["✅ Confirm & Save", "❌ Cancel"]], resize_keyboard=True)
+
+    if "Cancel" in text or text == "/cancel" or "❌" in text:
+        return await cancel(update, context)
+
+    if not msg or not msg.text:
+        await msg.reply_text("⚠️ Please tap '✅ Confirm & Save' or '❌ Cancel':", reply_markup=cancel_kb)
+        return CONFIRM_SETUP
+
+    if text.startswith("/"):
+        await msg.reply_text("⚠️ Commands cannot be used here. Please tap '✅ Confirm & Save' or '❌ Cancel':", reply_markup=cancel_kb)
+        return CONFIRM_SETUP
+
+    if "Confirm" not in text and "✅" not in text:
+        await msg.reply_text("Please tap '✅ Confirm & Save' to complete setup, or '❌ Cancel':", reply_markup=cancel_kb)
+        return CONFIRM_SETUP
+
     user = update.effective_user
     api_key = context.user_data["api_key"]
     model_id = context.user_data.get("selected_model", DEFAULT_MODEL)
     
     firebase.update_user_config(user.id, api_key, model_id)
     
-    await update.message.reply_text("✅ Setup complete! You're ready to practice! 🎯", reply_markup=get_student_keyboard())
+    await msg.reply_text("✅ Setup complete! You're ready to practice! 🎯", reply_markup=get_student_keyboard())
     return ConversationHandler.END
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2578,8 +2760,35 @@ def _start_health_server() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════
-# MAIN
+# ERROR HANDLER & MAIN
 # ══════════════════════════════════════════════════════════════════
+
+logger = logging.getLogger(__name__)
+
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and inform user or handle background network/conflict errors."""
+    err = context.error
+    logger.error("Exception while handling an update: %s", err, exc_info=err)
+
+    if isinstance(err, telegram.error.Conflict):
+        print("\n" + "!" * 60)
+        print("[BOT CONFLICT ERROR] Another instance of the bot is currently polling!")
+        print("Make sure only one bot instance is running.")
+        print("!" * 60 + "\n")
+        return
+
+    if isinstance(err, (telegram.error.NetworkError, telegram.error.TimedOut)):
+        print(f"[BOT NETWORK] Telegram network timeout or connection reset: {err}")
+        return
+
+    if update and isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ An unexpected error occurred while processing your request. Please try again or send /cancel."
+            )
+        except Exception:
+            pass
+
 
 def main():
     # ── Bind port FIRST so Render's port-scan never times out ──────
@@ -2607,25 +2816,11 @@ def main():
         return
 
     application = Application.builder().token(token).build()
+    application.add_error_handler(global_error_handler)
 
     # ─ Callbacks (must be registered before ConversationHandlers)
     application.add_handler(CallbackQueryHandler(switch_model_callback, pattern="^switch_"))
     application.add_handler(CallbackQueryHandler(hw_toggle_callback, pattern="^hw_toggle_"))
-    application.add_handler(CommandHandler("model", model_command))
-    application.add_handler(CommandHandler("models", model_command))
-    application.add_handler(MessageHandler(filters.Regex(r"^🤖 Choose Model"), model_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("settings", settings))
-    application.add_handler(CommandHandler("tokens", token_usage))
-    application.add_handler(CommandHandler("myinfo", myinfo_command))
-    application.add_handler(CommandHandler("password", password_command))
-    application.add_handler(CommandHandler("nickname", nickname_command))
-    application.add_handler(CommandHandler("join", join_class_command))
-    application.add_handler(CommandHandler("leaveclass", leave_class_command))
-    application.add_handler(CommandHandler("phone", phone_command))
-    application.add_handler(CommandHandler("devclean", devclean_command))
-    application.add_handler(CommandHandler("clean", devclean_command))
-    application.add_handler(CommandHandler("cleandb", devclean_command))
 
     # ─ Start / role selection + API key setup & Telegram Registration
     start_conv = ConversationHandler(
@@ -2637,24 +2832,27 @@ def main():
             MessageHandler(filters.Regex(r"^(📱 Link Phone Number|Link Phone)$"), phone_command),
         ],
         states={
-            REG_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_role_step)],
+            REG_ROLE: [MessageHandler(filters.ALL, reg_role_step)],
             REG_PHONE: [
                 MessageHandler(filters.CONTACT, reg_phone_step),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, reg_phone_step)
+                MessageHandler(filters.ALL, reg_phone_step)
             ],
-            REG_CHOOSE_NICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_choose_nick_step)],
-            REG_CUSTOM_NICK: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_custom_nick_step)],
-            REG_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_password_step)],
-            CHOOSE_ROLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_role)],
-            ENTER_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_api_key)],
-            SELECT_MODEL: [CallbackQueryHandler(select_model, pattern="^model_")],
-            CONFIRM_SETUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_setup)],
+            REG_CHOOSE_NICK: [MessageHandler(filters.ALL, reg_choose_nick_step)],
+            REG_CUSTOM_NICK: [MessageHandler(filters.ALL, reg_custom_nick_step)],
+            REG_PASSWORD: [MessageHandler(filters.ALL, reg_password_step)],
+            CHOOSE_ROLE: [MessageHandler(filters.ALL, choose_role)],
+            ENTER_API_KEY: [MessageHandler(filters.ALL, enter_api_key)],
+            SELECT_MODEL: [
+                CallbackQueryHandler(select_model, pattern="^model_"),
+                MessageHandler(filters.ALL, enter_api_key)
+            ],
+            CONFIRM_SETUP: [MessageHandler(filters.ALL, confirm_setup)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
             MessageHandler(filters.Regex(r"^(❌ Cancel|Cancel)$"), cancel)
         ],
-        allow_reentry=True,
+        allow_reentry=False,
     )
 
     # ─ Log practice time
@@ -2768,7 +2966,7 @@ def main():
         allow_reentry=True,
     )
 
-    # Register all handlers
+    # Register all ConversationHandlers first so active flows intercept their inputs & commands
     application.add_handler(start_conv)
     application.add_handler(time_conv)
     application.add_handler(essay_conv)
@@ -2779,6 +2977,24 @@ def main():
     application.add_handler(progress_conv)
     application.add_handler(broadcast_conv)
     application.add_handler(assess_conv)
+
+    # Standalone Command Handlers (invoked when not inside an active conversation)
+    application.add_handler(CommandHandler("model", model_command))
+    application.add_handler(CommandHandler("models", model_command))
+    application.add_handler(MessageHandler(filters.Regex(r"^🤖 Choose Model"), model_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("settings", settings))
+    application.add_handler(CommandHandler("tokens", token_usage))
+    application.add_handler(CommandHandler("myinfo", myinfo_command))
+    application.add_handler(CommandHandler("password", password_command))
+    application.add_handler(CommandHandler("nickname", nickname_command))
+    application.add_handler(CommandHandler("join", join_class_command))
+    application.add_handler(CommandHandler("leaveclass", leave_class_command))
+    application.add_handler(CommandHandler("phone", phone_command))
+    application.add_handler(CommandHandler("devclean", devclean_command))
+    application.add_handler(CommandHandler("clean", devclean_command))
+    application.add_handler(CommandHandler("cleandb", devclean_command))
+
     application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
